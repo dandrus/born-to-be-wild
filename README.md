@@ -6,7 +6,6 @@ Daily motorcycle ride weather reports for Ada and Canyon Counties, Idaho. Sends 
 
 - Podman installed on the server
 - A Gmail account with an App Password ([setup guide](https://support.google.com/accounts/answer/185833))
-  - This project uses `serversignal0@gmail.com`
   - Enable 2-Step Verification, then create an App Password under Security → App Passwords
 
 ## Quick Start
@@ -32,7 +31,7 @@ mkdir -p ~/born-to-be-wild-data
 ```bash
 # Initialize the DB and add a subscriber (run from the project directory)
 # Email only (default)
-DB_PATH=~/born-to-be-wild-data/born-to-be-wild.sqlite python3 cli.py add "Daniel" "signalbit@icloud.com" "6:15 AM"
+DB_PATH=~/born-to-be-wild-data/born-to-be-wild.sqlite python3 cli.py add "Daniel" "daniel@example.com" "6:15 AM"
 
 # SMS only
 DB_PATH=~/born-to-be-wild-data/born-to-be-wild.sqlite python3 cli.py add "Dan" "dan@example.com" "6:15 AM" --phone 208-555-1234 --no-message-email --message-phone
@@ -65,7 +64,7 @@ mkdir -p ~/.config/systemd/user
 cp deploy/born-to-be-wild.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now born-to-be-wild.service
-loginctl enable-linger nunchuckfusion
+loginctl enable-linger $USER
 ```
 
 ## CLI Usage
