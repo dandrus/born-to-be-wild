@@ -1,0 +1,11 @@
+.env
+*.sqlite
+*.db
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+tests/
+.git
+born_to_be_wild.md
+deploy/

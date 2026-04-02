@@ -1,0 +1,21 @@
+[Unit]
+Description=Born to be Wild — Motorcycle Ride Weather Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run the container in the foreground so systemd tracks it directly.
+# %h expands to the user's home directory.
+ExecStartPre=-/usr/bin/podman rm -f born-to-be-wild
+ExecStart=/usr/bin/podman run --rm \
+    --name born-to-be-wild \
+    -v %h/born-to-be-wild-data:/data:Z \
+    --env-file %h/.config/born-to-be-wild/.env \
+    localhost/born-to-be-wild
+ExecStop=/usr/bin/podman stop born-to-be-wild
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,12 @@
+# Credentials and personal data
+.env
+*.sqlite
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Claude local settings
+.claude/
