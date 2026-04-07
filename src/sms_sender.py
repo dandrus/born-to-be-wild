@@ -55,18 +55,23 @@ def build_sms(
     elif assessment.status == "CAUTION":
         for note in assessment.caution_notes:
             if not _ascii(note).lower().startswith(skip_prefixes):
-                lines.append(_ascii(note))
+                sms_note = _ascii(note)
+                # SR/SS already appear in the footer line; drop the redundant times
+                if sms_note.lower().startswith("reduced visibility:"):
+                    sms_note = "Reduced visibility: at SR"
+                lines.append(sms_note)
 
     lines.append(f"Temp: {assessment.temp_min:.0f}-{assessment.temp_max:.0f}F")
     lines.append(f"Wind: {wind}")
     lines.append(f"SR {sunrise.strftime('%-I:%M %p')} SS {sunset.strftime('%-I:%M %p')}")
     lines.append("Reply STOP to unsub")
 
-    # Hard 140-byte limit: drop optional detail lines (after header) one at a time,
+    # Hard 160-char limit (GSM-7: 140 bytes × 8/7 = 160 chars per segment).
+    # Drop optional detail lines (after header) one at a time,
     # always preserving "Reply STOP to unsub" at the end.
-    while len("\n".join(lines)) > 140 and len(lines) > 2:
+    while len("\n".join(lines)) > 160 and len(lines) > 2:
         lines.pop(1)
-    return "\n".join(lines)[:140]
+    return "\n".join(lines)[:160]
 
 
 def send_sms_report(
