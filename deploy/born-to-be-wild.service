@@ -10,7 +10,7 @@ Type=simple
 ExecStartPre=-/usr/bin/podman rm -f born-to-be-wild
 ExecStart=/usr/bin/podman run --rm \
     --name born-to-be-wild \
-    -v %h/born-to-be-wild-data:/data:Z \
+    -v %h/.config/born-to-be-wild/data:/data:Z \
     --env-file %h/.config/born-to-be-wild/.env \
     localhost/born-to-be-wild
 ExecStop=/usr/bin/podman stop born-to-be-wild

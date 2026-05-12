@@ -45,11 +45,13 @@ def init_db(db_path: str) -> None:
                 pass  # Column already exists
 
         # Migrate notify_via → message_email + message_phone (idempotent)
+        # Sets notify_via = NULL after migrating so this only runs once per row.
         try:
             conn.execute("""
                 UPDATE subscribers
                 SET message_email = CASE notify_via WHEN 'sms' THEN 0 ELSE 1 END,
-                    message_phone = CASE notify_via WHEN 'sms' THEN 1 WHEN 'both' THEN 1 ELSE 0 END
+                    message_phone = CASE notify_via WHEN 'sms' THEN 1 WHEN 'both' THEN 1 ELSE 0 END,
+                    notify_via = NULL
                 WHERE notify_via IS NOT NULL
             """)
         except Exception:

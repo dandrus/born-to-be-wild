@@ -16,22 +16,20 @@ podman build -t born-to-be-wild .
 podman run -d \
   --name born-to-be-wild \
   --restart=always \
-  -v ~/born-to-be-wild-data:/data:Z \
+  -v ~/.config/born-to-be-wild/data:/data:Z \
   --env-file ~/.config/born-to-be-wild/.env \
   born-to-be-wild
 
-# Manage subscribers via CLI (local or inside container)
-python cli.py list
-python cli.py add "Dan" dan@example.com "6:15 AM"
-python cli.py add "Dan" dan@example.com "6:15 AM" --phone 208-555-1234 --no-message-email --message-phone
-python cli.py update Dan --message-phone --no-message-email   # switch to SMS only
-python cli.py update 2 --message-email --message-phone        # enable both by ID
-python cli.py remove Dan
-python cli.py history Dan --days 14
-python cli.py stats
-
-# Run inside running container
-podman exec born-to-be-wild python cli.py list
+# Manage subscribers via CLI — MUST use podman exec with DB_PATH so writes go to the mounted volume.
+# Running cli.py directly on the host uses a fallback ./born-to-be-wild.sqlite that the container never sees.
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py list
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py add "Dan" dan@example.com "6:15 AM"
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py add "Dan" dan@example.com "6:15 AM" --phone 208-555-1234 --no-message-email --message-phone
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py update Dan --message-phone --no-message-email   # switch to SMS only
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py update 2 --message-email --message-phone        # enable both by ID
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py remove Dan
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py history Dan --days 14
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py stats
 
 # Run tests
 python -m pytest tests/

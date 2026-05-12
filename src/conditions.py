@@ -83,10 +83,16 @@ def evaluate(
     elif wind_max > WIND_NOGO:
         nogo.append(f"Sustained winds exceed 50 mph ({wind_max:.0f} mph)")
 
-    # NWS active hazard/warning alerts
+    # NWS alerts: Warnings and Watches are NO-GO; Advisories and Statements are CAUTION
+    _nws_warnings: list[str] = []
+    _nws_advisories: list[str] = []
     if nws_alerts:
         for alert in nws_alerts:
-            nogo.append(f"NWS Alert: {alert}")
+            if any(sev in alert for sev in ("Warning", "Watch")):
+                _nws_warnings.append(f"NWS Alert: {alert}")
+            else:
+                _nws_advisories.append(f"NWS Alert: {alert}")
+    nogo.extend(_nws_warnings)
 
     # --- CAUTION checks (only evaluated when not already NO-GO) ---
     if not nogo:
@@ -105,6 +111,9 @@ def evaluate(
         if overnight_slices and any(s.has_precip for s in overnight_slices):
             last_rain = max(s.time for s in overnight_slices if s.has_precip)
             caution.append(f"Roads may be wet (rain overnight until {last_rain.strftime('%-I:%M %p')})")
+
+        # NWS advisory-level alerts
+        caution.extend(_nws_advisories)
 
         # Partial darkness check — single consolidated note per spec
         if window_start < sunrise or window_end > sunset:

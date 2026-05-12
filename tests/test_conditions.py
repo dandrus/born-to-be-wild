@@ -155,8 +155,8 @@ def test_caution_window_after_sunset():
     assert any("Reduced visibility" in n for n in result.caution_notes)
 
 
-def test_nogo_nws_alert():
-    """Active NWS alert triggers NO-GO."""
+def test_nogo_nws_warning():
+    """Active NWS Warning triggers NO-GO."""
     slices = _base_slices(temp_f=65.0, wind_mph=10.0, gust_mph=12.0)
     win_start = datetime(2026, 3, 26, 8, 0, tzinfo=_TZ)
     win_end = datetime(2026, 3, 26, 18, 0, tzinfo=_TZ)
@@ -166,10 +166,45 @@ def test_nogo_nws_alert():
         sunset=_SUNSET,
         window_start=win_start,
         window_end=win_end,
-        nws_alerts=["Dense Fog Advisory"],
+        nws_alerts=["High Wind Warning"],
     )
     assert result.status == "NO-GO"
-    assert any("Dense Fog Advisory" in r for r in result.nogo_reasons)
+    assert any("High Wind Warning" in r for r in result.nogo_reasons)
+
+
+def test_caution_nws_advisory():
+    """Active NWS Advisory triggers CAUTION, not NO-GO."""
+    slices = _base_slices(temp_f=65.0, wind_mph=10.0, gust_mph=12.0)
+    win_start = datetime(2026, 3, 26, 8, 0, tzinfo=_TZ)
+    win_end = datetime(2026, 3, 26, 18, 0, tzinfo=_TZ)
+    result = evaluate(
+        slices=slices,
+        sunrise=_SUNRISE,
+        sunset=_SUNSET,
+        window_start=win_start,
+        window_end=win_end,
+        nws_alerts=["Wind Advisory"],
+    )
+    assert result.status == "CAUTION"
+    assert any("Wind Advisory" in n for n in result.caution_notes)
+    assert not result.nogo_reasons
+
+
+def test_nogo_nws_watch():
+    """Active NWS Watch triggers NO-GO."""
+    slices = _base_slices(temp_f=65.0, wind_mph=10.0, gust_mph=12.0)
+    win_start = datetime(2026, 3, 26, 8, 0, tzinfo=_TZ)
+    win_end = datetime(2026, 3, 26, 18, 0, tzinfo=_TZ)
+    result = evaluate(
+        slices=slices,
+        sunrise=_SUNRISE,
+        sunset=_SUNSET,
+        window_start=win_start,
+        window_end=win_end,
+        nws_alerts=["Severe Thunderstorm Watch"],
+    )
+    assert result.status == "NO-GO"
+    assert any("Severe Thunderstorm Watch" in r for r in result.nogo_reasons)
 
 
 def test_nws_alerts_none_does_not_affect_go():

@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends man-db && rm -r
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN argparse-manpage \
+RUN PYTHONPATH=/app argparse-manpage \
       --pyfile cli.py \
       --function build_parser \
       --project-name "born-to-be-wild" \

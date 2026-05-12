@@ -208,7 +208,7 @@ def fetch_nws_alerts() -> list[str]:
         resp = requests.get(url, params=params, headers=_NWS_HEADERS, timeout=config.API_TIMEOUT)
         resp.raise_for_status()
         features = resp.json().get("features", [])
-        alerts = [f["properties"]["event"] for f in features]
+        alerts = list(dict.fromkeys(f["properties"]["event"] for f in features))
         if alerts:
             log.warning(f"NWS active alerts: {alerts}")
         else:
