@@ -32,13 +32,13 @@ podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.p
 podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py stats
 
 # Run tests
-python -m pytest tests/
+python3 -m pytest tests/
 
 # Run a single test file
-python -m pytest tests/test_conditions.py
+python3 -m pytest tests/test_conditions.py
 
 # Run a single test
-python -m pytest tests/test_conditions.py::test_nogo_rain
+python3 -m pytest tests/test_conditions.py::test_nogo_rain
 
 # View logs
 journalctl --user -u born-to-be-wild.service -f
@@ -51,14 +51,16 @@ loginctl enable-linger nunchuckfusion
 
 ## Architecture
 
-The app is a **long-running Python process** (`src/main.py`) that uses APScheduler for two recurring jobs:
+The app is a **long-running Python process** (`src/main.py`) that uses APScheduler for four recurring jobs:
 
-1. **Per-subscriber email jobs** — scheduled at each subscriber's configured send time (weekdays, non-holidays only). Each job fetches fresh weather data, evaluates conditions, and sends one email.
-2. **Inbox polling loop** — runs every 5 minutes via IMAP, parses reply commands, and dispatches responses.
+1. **Weather pre-fetch** — runs at 5:05 AM daily. Fetches a full 24-hour block (midnight–midnight) and caches it in memory. If both sources fail, schedules a retry every 15 minutes until success or 9 AM.
+2. **Per-subscriber report jobs** — scheduled at each subscriber's configured send time (weekdays, non-holidays only). Each job tries a fresh weather fetch; on failure falls back to the morning cache; if neither is available the send is silently skipped (no message sent).
+3. **Inbox polling loop** — runs every 5 minutes via IMAP, parses reply commands, and dispatches responses.
+4. **Health check** — runs daily at 10:00 AM (see below).
 
 ### Key Design Points
 
-- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover. Both are free/keyless. 5-second timeout per request. If both fail, email sends anyway with a warning note.
+- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover. Both are free/keyless. 5-second timeout per request. Pre-fetched at 5:05 AM and cached in memory for the day; send jobs use the cache as a fallback if a fresh fetch fails. If no data is available at send time, the send is skipped — no "unavailable" message is sent.
 - **Forecast window:** Per-subscriber — starts at their email send time, extends 12 hours forward. One shared lat/lon: Meridian, ID (43.6121, -116.3915).
 - **Condition tiers:** `conditions.py` evaluates NO-GO → CAUTION → GO in priority order. Comparisons use `round(temp_min)` so the displayed temperature matches the tier decision. NO-GO triggers: rounded temp ≤ 44°F (displays as "44F" or below), precipitation, wind > 50 mph, NWS hazards. CAUTION triggers: rounded temp 45–49°F, wind 40–50 mph, rain probability 30–50%, overnight rain, partial darkness in window. Precipitation window: single rain hour shows "starting H:MM AM/PM"; multiple hours show "H:MM AM/PM - H:MM AM/PM".
 - **Timezone:** All times in `America/Boise` using `zoneinfo`. Times stored and compared in local Boise time. Scheduler is timezone-aware.

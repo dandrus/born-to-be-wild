@@ -145,7 +145,10 @@ systemctl --user restart born-to-be-wild.service
 ```
 
 **Health checks:**
-A daily health check runs at 10:00 AM Boise time. If no emails have been sent in the last 24 hours on a weekday, an alert is sent to `ADMIN_EMAIL`.
+A daily health check runs at 10:00 AM Boise time. If no messages have been sent in the last 24 hours on a weekday, an alert is sent to `ADMIN_EMAIL`.
+
+**Weather pre-fetch:**
+Weather is pre-fetched at 5:05 AM daily and cached in memory. Send jobs use this cache as a fallback if a live fetch fails at send time. If neither is available, the send is silently skipped — no "unavailable" message is sent. Pre-fetch failures retry every 15 minutes until 9 AM.
 
 **New subscribers not receiving emails:**
 The scheduler loads subscribers at startup. After adding a subscriber via `cli.py`, restart the service:

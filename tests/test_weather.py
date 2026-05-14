@@ -11,6 +11,8 @@ from src.weather import (
     _parse_nws_wind,
     fetch_weather,
     fetch_nws_alerts,
+    filter_slices,
+    HourlySlice,
 )
 
 _TZ = ZoneInfo("America/Boise")
@@ -225,3 +227,39 @@ def test_fetch_nws_alerts_returns_empty_on_failure():
         alerts = fetch_nws_alerts()
 
     assert alerts == []
+
+
+# ---------------------------------------------------------------------------
+# filter_slices
+# ---------------------------------------------------------------------------
+
+def _make_slice(hour: int) -> HourlySlice:
+    return HourlySlice(
+        time=datetime(2026, 5, 14, hour, 0, tzinfo=_TZ),
+        temp_f=65.0, wind_mph=8.0, gust_mph=12.0,
+        precip_mm=0.0, precip_prob=10, weather_code=1,
+        description="Clear", has_precip=False,
+    )
+
+
+def test_filter_slices_returns_within_window():
+    slices = [_make_slice(h) for h in range(0, 24)]
+    start = datetime(2026, 5, 14, 6, 0, tzinfo=_TZ)
+    end = datetime(2026, 5, 14, 18, 0, tzinfo=_TZ)
+    result = filter_slices(slices, start, end)
+    assert len(result) == 12
+    assert all(start <= s.time < end for s in result)
+
+
+def test_filter_slices_excludes_boundary_end():
+    slices = [_make_slice(h) for h in range(0, 24)]
+    start = datetime(2026, 5, 14, 6, 0, tzinfo=_TZ)
+    end = datetime(2026, 5, 14, 6, 0, tzinfo=_TZ)  # zero-width window
+    result = filter_slices(slices, start, end)
+    assert result == []
+
+
+def test_filter_slices_empty_input():
+    start = datetime(2026, 5, 14, 6, 0, tzinfo=_TZ)
+    end = datetime(2026, 5, 14, 18, 0, tzinfo=_TZ)
+    assert filter_slices([], start, end) == []

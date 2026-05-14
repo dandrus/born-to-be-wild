@@ -53,6 +53,11 @@ class HourlySlice:
     has_precip: bool     # derived: True if code is in _PRECIP_CODES or shortForecast says rain/snow
 
 
+def filter_slices(slices: list[HourlySlice], window_start: datetime, window_end: datetime) -> list[HourlySlice]:
+    """Return slices whose time falls within [window_start, window_end)."""
+    return [s for s in slices if window_start <= s.time < window_end]
+
+
 def fetch_weather(window_start: datetime, window_end: datetime) -> list[HourlySlice]:
     """Fetch hourly slices covering [window_start, window_end]. Open-Meteo primary, NWS fallback."""
     try:

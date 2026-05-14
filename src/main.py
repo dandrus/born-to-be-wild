@@ -1,9 +1,7 @@
 """Phase 3 entry point: multi-subscriber scheduler + inbox polling."""
 from __future__ import annotations
 import logging
-import smtplib
-from datetime import datetime, timedelta
-from email.mime.text import MIMEText
+from datetime import datetime, timedelta, date
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -13,14 +11,65 @@ from .logging_config import setup_logging
 from . import config
 from .subscribers import Subscriber, init_db, list_subscribers, get_by_id, log_email_sent
 from .holidays import is_skip_day
-from .weather import fetch_weather, fetch_nws_alerts
+from .weather import HourlySlice, fetch_weather, fetch_nws_alerts, filter_slices
 from .conditions import evaluate
 from .email_sender import send_report
 from .sms_sender import send_sms_report
 from .sun import get_sunrise_sunset
 from .health import run_health_check
 
+_daily_cache: list[HourlySlice] | None = None
+_cache_date: date | None = None
+
 log = logging.getLogger(__name__)
+
+
+def _do_prefetch() -> bool:
+    """Fetch and cache today's full 24-hour weather block. Returns True on success."""
+    global _daily_cache, _cache_date
+    today = datetime.now(tz=config.TIMEZONE).date()
+    window_start = datetime(today.year, today.month, today.day, 0, 0, tzinfo=config.TIMEZONE)
+    window_end = window_start + timedelta(hours=24)
+    try:
+        slices = fetch_weather(window_start, window_end)
+        _daily_cache = slices
+        _cache_date = today
+        log.info(f"Weather pre-fetched: {len(slices)} hourly slices cached for {today}")
+        return True
+    except RuntimeError:
+        log.warning("Weather pre-fetch failed — both sources unavailable")
+        return False
+
+
+def _prefetch_job(scheduler: BlockingScheduler) -> None:
+    """Runs at 5:05 AM. Fetches weather cache; on failure, starts 15-min retries."""
+    if not _do_prefetch():
+        if not scheduler.get_job("weather_prefetch_retry"):
+            scheduler.add_job(
+                _prefetch_retry_job,
+                trigger=IntervalTrigger(minutes=15),
+                kwargs={"scheduler": scheduler},
+                id="weather_prefetch_retry",
+                name="Weather pre-fetch retry",
+                misfire_grace_time=120,
+            )
+            log.info("Weather pre-fetch retry scheduled every 15 minutes")
+
+
+def _prefetch_retry_job(scheduler: BlockingScheduler) -> None:
+    """Retries weather pre-fetch every 15 min; stops on success or after 9 AM."""
+    if datetime.now(tz=config.TIMEZONE).hour >= 9:
+        log.info("Weather pre-fetch retry giving up (past 9 AM)")
+        try:
+            scheduler.remove_job("weather_prefetch_retry")
+        except Exception:
+            pass
+        return
+    if _do_prefetch():
+        try:
+            scheduler.remove_job("weather_prefetch_retry")
+        except Exception:
+            pass
 
 
 def main() -> None:
@@ -63,6 +112,16 @@ def main() -> None:
     )
     log.info("Health check scheduled daily at 10:00 AM")
 
+    scheduler.add_job(
+        _prefetch_job,
+        trigger=CronTrigger(hour=5, minute=5, timezone=config.TIMEZONE),
+        kwargs={"scheduler": scheduler},
+        id="weather_prefetch",
+        name="Weather pre-fetch",
+        misfire_grace_time=600,
+    )
+    log.info("Weather pre-fetch scheduled at 5:05 AM")
+
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
@@ -103,7 +162,6 @@ def send_job(subscriber_id: int, db_path: str) -> None:
         return
 
     if sub.snooze_until is not None:
-        from datetime import date
         snooze_date = date.fromisoformat(sub.snooze_until)
         if today <= snooze_date:
             log.info(f"Skipping {sub.email}: snoozed until {snooze_date}")
@@ -116,6 +174,7 @@ def _run_send(sub: Subscriber) -> None:
     """Fetch weather, evaluate, and send the ride report for one subscriber."""
     boise_tz = config.TIMEZONE
     now = datetime.now(tz=boise_tz)
+    today = now.date()
 
     send_h, send_m = (int(x) for x in sub.send_time.split(":"))
     window_start = now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
@@ -127,20 +186,30 @@ def _run_send(sub: Subscriber) -> None:
         f"({window_start.strftime('%-I:%M %p')} - {window_end.strftime('%-I:%M %p')})"
     )
 
-    sunrise, sunset = get_sunrise_sunset(now.date())
+    sunrise, sunset = get_sunrise_sunset(today)
 
     try:
         slices = fetch_weather(window_start, window_end)
     except RuntimeError:
-        log.error(f"Both weather sources failed for {sub.email} — sending unavailable email")
-        _send_unavailable(sub, window_start, sunrise, sunset)
-        return
+        log.warning(f"Fresh weather fetch failed for {sub.name} — trying pre-fetch cache")
+        if _daily_cache is not None and _cache_date == today:
+            slices = filter_slices(_daily_cache, window_start, window_end)
+            if not slices:
+                log.error(f"Cache has no data for {sub.name}'s window — skipping")
+                return
+            log.info(f"Using cached weather for {sub.name} ({len(slices)} slices)")
+        else:
+            log.error(f"No weather cache available for {sub.name} — skipping")
+            return
 
     try:
         overnight = fetch_weather(overnight_start, window_start)
     except Exception as exc:
-        log.warning(f"Could not fetch overnight data for {sub.email}: {exc}")
-        overnight = []
+        log.warning(f"Could not fetch overnight data for {sub.name}: {exc}")
+        if _daily_cache is not None and _cache_date == today:
+            overnight = filter_slices(_daily_cache, overnight_start, window_start)
+        else:
+            overnight = []
 
     alerts = fetch_nws_alerts()
 
@@ -182,32 +251,6 @@ def _run_send(sub: Subscriber) -> None:
             log.error(f"SMS failed for {sub.name}: {exc}")
 
     log_email_sent(config.DB_PATH, sub.id, assessment.status)
-
-
-def _send_unavailable(
-    sub: Subscriber,
-    window_start: datetime,
-    sunrise: datetime,
-    sunset: datetime,
-) -> None:
-    date_str = window_start.strftime("%a %b %-d, %Y")
-    subject = f"Ride Report: UNKNOWN - {date_str}"
-    body = (
-        f"Good morning, {sub.name}!\n\n"
-        "TODAY'S RIDE STATUS: UNKNOWN ⚠️\n\n"
-        "⚠ Weather data unavailable — could not reach weather services. "
-        "Ride with caution and check conditions manually.\n\n"
-        f"Sunrise: {sunrise.strftime('%-I:%M %p')} | Sunset: {sunset.strftime('%-I:%M %p')}\n"
-    )
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = config.GMAIL_ADDRESS
-    msg["To"] = sub.email
-    with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.login(config.GMAIL_ADDRESS, config.GMAIL_APP_PASSWORD)
-        smtp.sendmail(config.GMAIL_ADDRESS, sub.email, msg.as_string())
 
 
 if __name__ == "__main__":
