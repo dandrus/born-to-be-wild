@@ -5,6 +5,20 @@ from datetime import datetime, timezone
 
 
 @dataclass
+class Location:
+    id: int
+    subscriber_id: int
+    zip_code: str
+    lat: float
+    lon: float
+    timezone: str
+    city: str | None = None
+    state: str | None = None
+    label: str | None = None
+    display_order: int = 0
+
+
+@dataclass
 class Subscriber:
     id: int
     name: str
@@ -56,6 +70,23 @@ def init_db(db_path: str) -> None:
             """)
         except Exception:
             pass
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriber_locations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscriber_id INTEGER NOT NULL,
+                zip_code      TEXT    NOT NULL,
+                lat           REAL    NOT NULL,
+                lon           REAL    NOT NULL,
+                timezone      TEXT    NOT NULL DEFAULT 'America/Boise',
+                city          TEXT,
+                state         TEXT,
+                label         TEXT,
+                display_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (subscriber_id) REFERENCES subscribers(id),
+                UNIQUE (subscriber_id, zip_code)
+            )
+        """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS email_log (
@@ -247,6 +278,82 @@ def get_accuracy_stats(db_path: str) -> list[dict]:
                ORDER BY s.send_time""",
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_locations(db_path: str, subscriber_id: int) -> list[Location]:
+    """Return all locations for a subscriber, ordered by display_order then id."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM subscriber_locations WHERE subscriber_id = ? "
+            "ORDER BY display_order, id",
+            (subscriber_id,),
+        ).fetchall()
+    return [_row_to_location(r) for r in rows]
+
+
+def add_location(
+    db_path: str,
+    subscriber_id: int,
+    zip_code: str,
+    lat: float,
+    lon: float,
+    timezone: str,
+    city: str | None = None,
+    state: str | None = None,
+    label: str | None = None,
+) -> Location:
+    """Add a location to a subscriber. Raises ValueError on duplicate zip for that subscriber."""
+    existing = get_locations(db_path, subscriber_id)
+    display_order = len(existing)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO subscriber_locations "
+                "(subscriber_id, zip_code, lat, lon, timezone, city, state, label, display_order) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (subscriber_id, zip_code, lat, lon, timezone, city, state, label, display_order),
+            )
+            loc_id = cursor.lastrowid
+    except sqlite3.IntegrityError:
+        raise ValueError(f"Zip code {zip_code!r} is already added for this subscriber")
+    return Location(
+        id=loc_id,
+        subscriber_id=subscriber_id,
+        zip_code=zip_code,
+        lat=lat,
+        lon=lon,
+        timezone=timezone,
+        city=city,
+        state=state,
+        label=label,
+        display_order=display_order,
+    )
+
+
+def remove_location(db_path: str, subscriber_id: int, zip_code: str) -> bool:
+    """Remove a location by zip code. Returns True if a row was deleted."""
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM subscriber_locations WHERE subscriber_id = ? AND zip_code = ?",
+            (subscriber_id, zip_code),
+        )
+    return cursor.rowcount > 0
+
+
+def _row_to_location(row: sqlite3.Row) -> Location:
+    return Location(
+        id=row["id"],
+        subscriber_id=row["subscriber_id"],
+        zip_code=row["zip_code"],
+        lat=row["lat"],
+        lon=row["lon"],
+        timezone=row["timezone"],
+        city=row["city"],
+        state=row["state"],
+        label=row["label"],
+        display_order=row["display_order"],
+    )
 
 
 def _row_to_subscriber(row: sqlite3.Row) -> Subscriber:

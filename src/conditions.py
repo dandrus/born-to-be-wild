@@ -5,9 +5,7 @@ from datetime import datetime
 from .weather import HourlySlice
 
 # Thresholds
-TEMP_NOGO = 45.0        # °F
-TEMP_CAUTION_LOW = 45.0
-TEMP_CAUTION_HIGH = 50.0
+TEMP_NOGO = 45.0        # °F — rounded temp below this is NO-GO; 45+ is GO
 WIND_NOGO = 50.0        # mph (sustained or gust)
 WIND_CAUTION_LOW = 40.0
 WIND_CAUTION_HIGH = 50.0
@@ -96,9 +94,6 @@ def evaluate(
 
     # --- CAUTION checks (only evaluated when not already NO-GO) ---
     if not nogo:
-        if TEMP_CAUTION_LOW <= round(temp_min) < TEMP_CAUTION_HIGH:
-            caution.append(f"Temperature near threshold: low of {temp_min:.0f}°F")
-
         if WIND_CAUTION_LOW <= gust_max < WIND_CAUTION_HIGH:
             caution.append(f"Wind gusts {gust_max:.0f} mph (approaching 50 mph threshold)")
         elif WIND_CAUTION_LOW <= wind_max < WIND_CAUTION_HIGH:

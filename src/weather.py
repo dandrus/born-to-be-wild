@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from . import config
+from . import config  # used for API_TIMEOUT
 
 log = logging.getLogger(__name__)
 _BOISE_TZ = ZoneInfo("America/Boise")
@@ -58,17 +58,19 @@ def filter_slices(slices: list[HourlySlice], window_start: datetime, window_end:
     return [s for s in slices if window_start <= s.time < window_end]
 
 
-def fetch_weather(window_start: datetime, window_end: datetime) -> list[HourlySlice]:
+def fetch_weather(
+    window_start: datetime, window_end: datetime, lat: float, lon: float
+) -> list[HourlySlice]:
     """Fetch hourly slices covering [window_start, window_end]. Open-Meteo primary, NWS fallback."""
     try:
-        slices = _fetch_open_meteo(window_start, window_end)
+        slices = _fetch_open_meteo(window_start, window_end, lat, lon)
         log.info("Weather fetched from Open-Meteo", extra={})
         return slices
     except Exception as exc:
         log.warning(f"Open-Meteo failed ({exc}), trying NWS")
 
     try:
-        slices = _fetch_nws(window_start, window_end)
+        slices = _fetch_nws(window_start, window_end, lat, lon)
         log.info("Weather fetched from NWS (fallback)")
         return slices
     except Exception as exc:
@@ -80,11 +82,13 @@ def fetch_weather(window_start: datetime, window_end: datetime) -> list[HourlySl
 # Open-Meteo
 # ---------------------------------------------------------------------------
 
-def _fetch_open_meteo(window_start: datetime, window_end: datetime) -> list[HourlySlice]:
+def _fetch_open_meteo(
+    window_start: datetime, window_end: datetime, lat: float, lon: float
+) -> list[HourlySlice]:
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": config.LAT,
-        "longitude": config.LON,
+        "latitude": lat,
+        "longitude": lon,
         "hourly": ",".join([
             "temperature_2m",
             "precipitation_probability",
@@ -146,10 +150,12 @@ _NWS_PRECIP_KEYWORDS = {
     "ice", "freezing", "thunderstorm", "storm", "wintry",
 }
 
-def _fetch_nws(window_start: datetime, window_end: datetime) -> list[HourlySlice]:
+def _fetch_nws(
+    window_start: datetime, window_end: datetime, lat: float, lon: float
+) -> list[HourlySlice]:
     headers = {"User-Agent": "born-to-be-wild/1.0 (serversignal0@gmail.com)"}
 
-    points_url = f"https://api.weather.gov/points/{config.LAT},{config.LON}"
+    points_url = f"https://api.weather.gov/points/{lat},{lon}"
     log.debug(f"NWS points request: {points_url}")
     pts = requests.get(points_url, headers=headers, timeout=config.API_TIMEOUT)
     pts.raise_for_status()
@@ -201,14 +207,14 @@ def _parse_nws_wind(value: str) -> float:
 _NWS_HEADERS = {"User-Agent": "born-to-be-wild/1.0 (serversignal0@gmail.com)"}
 
 
-def fetch_nws_alerts() -> list[str]:
-    """Fetch active NWS hazard/warning alerts for the riding area.
+def fetch_nws_alerts(lat: float, lon: float) -> list[str]:
+    """Fetch active NWS hazard/warning alerts for a location.
 
     Returns a list of event name strings (e.g. ['Dense Fog Advisory', 'Wind Advisory']).
     Returns an empty list if the request fails — alerts are best-effort.
     """
     url = "https://api.weather.gov/alerts/active"
-    params = {"point": f"{config.LAT},{config.LON}"}
+    params = {"point": f"{lat},{lon}"}
     try:
         resp = requests.get(url, params=params, headers=_NWS_HEADERS, timeout=config.API_TIMEOUT)
         resp.raise_for_status()

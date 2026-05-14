@@ -1,6 +1,7 @@
 """SMS ride reports via Textbelt."""
 from __future__ import annotations
 import logging
+import re
 from datetime import datetime
 
 import requests
@@ -13,11 +14,6 @@ log = logging.getLogger(__name__)
 _TEXTBELT_URL = "https://textbelt.com/text"
 
 
-def _ascii(text: str) -> str:
-    """Replace non-GSM characters so the message stays in 160-char mode."""
-    return text.replace("°", "")
-
-
 def build_sms(
     name: str,
     assessment: Assessment,
@@ -25,53 +21,105 @@ def build_sms(
     window_end: datetime,
     sunrise: datetime,
     sunset: datetime,
+    triggering_zip: str | None = None,
 ) -> str:
-    """Build a concise SMS message. Avoids Unicode (emojis, degree symbol) to stay
-    within 160 chars/segment and use 1 credit per send."""
+    """Build a concise SMS message (single worst condition, no Unicode, ≤160 chars)."""
     date_str = window_start.strftime("%a %b %-d")
     wind = (
         f"{assessment.wind_min:.0f}-{assessment.wind_max:.0f} mph"
         + (f", Gusts {assessment.gust_max:.0f}" if assessment.gust_max > assessment.wind_max else "")
     )
 
-    lines = [f"{assessment.status} - {date_str}"]
+    # Header: include [zip] when a specific location triggered the status
+    if assessment.status != "GO" and triggering_zip:
+        header = f"{assessment.status} - {date_str} [{triggering_zip}]"
+    else:
+        header = f"{assessment.status} - {date_str}"
 
-    # Temp reason (only when below threshold)
-    if assessment.temp_min < 50:
-        lines.append(f"Temp low of {assessment.temp_min:.0f}F")
+    lines = [header]
 
-    # Precipitation line
-    if assessment.has_precip and assessment.precip_window:
-        lines.append(f"Rain {assessment.precip_window}")
-    elif assessment.precip_prob_max >= 30:
-        lines.append(f"Rain {assessment.precip_prob_max}% chance")
-
-    # Any other NO-GO or CAUTION reasons (wind, alerts, wet roads, etc.)
-    skip_prefixes = ("temperature", "rain", "temp")
-    if assessment.status == "NO-GO":
-        for reason in assessment.nogo_reasons:
-            if not _ascii(reason).lower().startswith(skip_prefixes):
-                lines.append(_ascii(reason))
-    elif assessment.status == "CAUTION":
-        for note in assessment.caution_notes:
-            if not _ascii(note).lower().startswith(skip_prefixes):
-                sms_note = _ascii(note)
-                # SR/SS already appear in the footer line; drop the redundant times
-                if sms_note.lower().startswith("reduced visibility:"):
-                    sms_note = "Reduced visibility: at SR"
-                lines.append(sms_note)
+    # Single worst-condition line for non-GO statuses
+    if assessment.status == "NO-GO" and assessment.nogo_reasons:
+        lines.append(_worst_nogo_line(assessment.nogo_reasons))
+    elif assessment.status == "CAUTION" and assessment.caution_notes:
+        lines.append(_worst_caution_line(assessment.caution_notes))
 
     lines.append(f"Temp: {assessment.temp_min:.0f}-{assessment.temp_max:.0f}F")
-    lines.append(f"Wind: {wind}")
+    lines.append(wind)
     lines.append(f"SR {sunrise.strftime('%-I:%M %p')} SS {sunset.strftime('%-I:%M %p')}")
     lines.append("Reply STOP to unsub")
 
-    # Hard 160-char limit (GSM-7: 140 bytes × 8/7 = 160 chars per segment).
-    # Drop optional detail lines (after header) one at a time,
-    # always preserving "Reply STOP to unsub" at the end.
+    # Hard 160-char limit — drop the condition line first if needed
     while len("\n".join(lines)) > 160 and len(lines) > 2:
         lines.pop(1)
     return "\n".join(lines)[:160]
+
+
+def _worst_nogo_line(reasons: list[str]) -> str:
+    """Pick and format the single most dangerous NO-GO reason for SMS.
+
+    Priority: winter precip / thunder > rain > temp > wind > NWS alert.
+    """
+    def _rank(r: str) -> int:
+        r = r.lower()
+        if "winter precipitation" in r or "thunderstorm" in r:
+            return 0
+        if "rain in forecast" in r:
+            return 1
+        if "temperature" in r:
+            return 2
+        if "gust" in r or "sustained wind" in r:
+            return 3
+        return 4  # NWS alert
+
+    worst = min(reasons, key=_rank)
+    w = worst.lower()
+
+    m_window = re.search(r'\(([^)]+)\)', worst)
+    window = m_window.group(1) if m_window else ""
+
+    if "winter precipitation" in w:
+        return f"Ice/Snow {window}" if window else "Ice/Snow in forecast"
+    if "thunderstorm" in w:
+        return f"Storms {window}" if window else "Thunderstorms"
+    if "rain in forecast" in w:
+        return f"Rain {window}" if window else "Rain in forecast"
+    if "temperature" in w:
+        m = re.search(r'low of (\d+)', worst)
+        return f"Temp low of {m.group(1)}F" if m else "Temp below 45F"
+    if "gust" in w:
+        m = re.search(r'\((\d+) mph\)', worst)
+        return f"Gusts {m.group(1)} mph" if m else "High wind gusts"
+    if "sustained wind" in w:
+        m = re.search(r'\((\d+) mph\)', worst)
+        return f"Wind {m.group(1)} mph" if m else "High winds"
+    # NWS alert
+    return worst.replace("NWS Alert: ", "")[:40]
+
+
+def _worst_caution_line(notes: list[str]) -> str:
+    """Pick and format the single most notable CAUTION note for SMS.
+
+    Priority: wind gusts > sustained wind > rain prob > NWS > wet roads > darkness.
+    """
+    for note in notes:
+        n = note.lower()
+        if "wind gust" in n:
+            m = re.search(r'(\d+) mph', note)
+            return f"Gusts {m.group(1)} mph" if m else "High wind gusts"
+        if "sustained wind" in n:
+            m = re.search(r'(\d+) mph', note)
+            return f"Wind {m.group(1)} mph" if m else "High winds"
+        if "rain probability" in n:
+            m = re.search(r'(\d+)%', note)
+            return f"Rain {m.group(1)}% chance" if m else "Elevated rain chance"
+        if "nws alert" in n:
+            return note.replace("NWS Alert: ", "")
+        if "wet" in n:
+            return "Wet roads from overnight rain"
+        if "reduced visibility" in n:
+            return "Reduced visibility: at SR"
+    return notes[0][:40] if notes else ""
 
 
 def send_sms_report(
@@ -82,13 +130,16 @@ def send_sms_report(
     window_end: datetime,
     sunrise: datetime,
     sunset: datetime,
+    triggering_zip: str | None = None,
 ) -> None:
     """Send a ride report SMS via Textbelt."""
     if not config.TEXTBELT_API_KEY:
         log.warning("TEXTBELT_API_KEY not set — skipping SMS")
         return
 
-    message = build_sms(name, assessment, window_start, window_end, sunrise, sunset)
+    message = build_sms(
+        name, assessment, window_start, window_end, sunrise, sunset, triggering_zip
+    )
     log.info(f"Sending SMS to {to_number}")
 
     resp = requests.post(

@@ -13,8 +13,6 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 TEXTBELT_API_KEY: str = os.getenv("TEXTBELT_API_KEY", "")
 
-LAT: float = 43.6121
-LON: float = -116.3915
 TIMEZONE = ZoneInfo("America/Boise")
 FORECAST_HOURS: int = 12
 API_TIMEOUT: int = 5

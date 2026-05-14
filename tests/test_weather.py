@@ -18,6 +18,8 @@ from src.weather import (
 _TZ = ZoneInfo("America/Boise")
 _WIN_START = datetime(2026, 3, 26, 6, 0, tzinfo=_TZ)
 _WIN_END = datetime(2026, 3, 26, 16, 0, tzinfo=_TZ)
+_LAT = 43.6121
+_LON = -116.3915
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ def test_open_meteo_filters_to_window():
     mock_resp.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", return_value=mock_resp):
-        slices = _fetch_open_meteo(_WIN_START, _WIN_END)
+        slices = _fetch_open_meteo(_WIN_START, _WIN_END, _LAT, _LON)
 
     assert all(_WIN_START <= s.time < _WIN_END for s in slices)
     assert len(slices) == 10  # hours 6-15 inclusive
@@ -82,7 +84,7 @@ def test_open_meteo_no_data_in_window_raises():
 
     with patch("src.weather.requests.get", return_value=mock_resp):
         with pytest.raises(ValueError, match="No hourly data"):
-            _fetch_open_meteo(_WIN_START, _WIN_END)
+            _fetch_open_meteo(_WIN_START, _WIN_END, _LAT, _LON)
 
 
 def test_open_meteo_has_precip_flag():
@@ -94,7 +96,7 @@ def test_open_meteo_has_precip_flag():
     mock_resp.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", return_value=mock_resp):
-        slices = _fetch_open_meteo(_WIN_START, _WIN_END)
+        slices = _fetch_open_meteo(_WIN_START, _WIN_END, _LAT, _LON)
 
     assert slices[3].has_precip is True
     assert slices[0].has_precip is False
@@ -137,7 +139,7 @@ def test_nws_filters_to_window():
     fc_mock.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", side_effect=[pts_mock, fc_mock]):
-        slices = _fetch_nws(_WIN_START, _WIN_END)
+        slices = _fetch_nws(_WIN_START, _WIN_END, _LAT, _LON)
 
     assert all(_WIN_START <= s.time < _WIN_END for s in slices)
     assert len(slices) == 10
@@ -156,7 +158,7 @@ def test_nws_precip_detected_from_short_forecast():
     fc_mock.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", side_effect=[pts_mock, fc_mock]):
-        slices = _fetch_nws(_WIN_START, _WIN_END)
+        slices = _fetch_nws(_WIN_START, _WIN_END, _LAT, _LON)
 
     assert slices[3].has_precip is True
     assert slices[0].has_precip is False
@@ -178,7 +180,7 @@ def test_fetch_weather_falls_back_to_nws():
 
     with patch("src.weather._fetch_open_meteo", side_effect=RuntimeError("timeout")):
         with patch("src.weather.requests.get", side_effect=[pts_mock, fc_mock]):
-            slices = fetch_weather(_WIN_START, _WIN_END)
+            slices = fetch_weather(_WIN_START, _WIN_END, _LAT, _LON)
 
     assert len(slices) == 10
 
@@ -187,7 +189,7 @@ def test_fetch_weather_raises_when_both_fail():
     with patch("src.weather._fetch_open_meteo", side_effect=RuntimeError("timeout")):
         with patch("src.weather._fetch_nws", side_effect=RuntimeError("NWS down")):
             with pytest.raises(RuntimeError, match="Both weather sources unavailable"):
-                fetch_weather(_WIN_START, _WIN_END)
+                fetch_weather(_WIN_START, _WIN_END, _LAT, _LON)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +208,7 @@ def test_fetch_nws_alerts_returns_event_names():
     mock_resp.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", return_value=mock_resp):
-        alerts = fetch_nws_alerts()
+        alerts = fetch_nws_alerts(_LAT, _LON)
 
     assert alerts == ["Dense Fog Advisory", "Wind Advisory"]
 
@@ -217,14 +219,14 @@ def test_fetch_nws_alerts_empty_when_none_active():
     mock_resp.raise_for_status.return_value = None
 
     with patch("src.weather.requests.get", return_value=mock_resp):
-        alerts = fetch_nws_alerts()
+        alerts = fetch_nws_alerts(_LAT, _LON)
 
     assert alerts == []
 
 
 def test_fetch_nws_alerts_returns_empty_on_failure():
     with patch("src.weather.requests.get", side_effect=ConnectionError("network down")):
-        alerts = fetch_nws_alerts()
+        alerts = fetch_nws_alerts(_LAT, _LON)
 
     assert alerts == []
 

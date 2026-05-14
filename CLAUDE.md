@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Born to be Wild** — A Python service that fetches weather for Ada/Canyon Counties, Idaho and emails motorcycle riders a daily GO / CAUTION / NO-GO ride report. Runs as a rootless Podman container managed by a systemd user service on `server0` (user: `nunchuckfusion`).
+**Born to be Wild** — A Python service that fetches weather for any US location and delivers motorcycle riders a daily GO / CAUTION / NO-GO ride report via email and/or SMS. Each subscriber can have multiple zip codes (useful for commute routes); the worst condition across all locations determines the verdict. Runs as a rootless Podman container managed by a systemd user service on `server0` (user: `nunchuckfusion`).
 
 ## Common Commands
 
@@ -30,6 +30,12 @@ podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.p
 podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py remove Dan
 podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py history Dan --days 14
 podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py stats
+
+# Manage locations — zip codes are resolved at add time, stored as lat/lon in DB
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py list-locations Dan
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py add-location Dan 83646 --label home
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py add-location Dan 83716 --label work
+podman exec -e DB_PATH=/data/born-to-be-wild.sqlite born-to-be-wild python cli.py remove-location Dan 83716
 
 # Run tests
 python3 -m pytest tests/
@@ -60,9 +66,10 @@ The app is a **long-running Python process** (`src/main.py`) that uses APSchedul
 
 ### Key Design Points
 
-- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover. Both are free/keyless. 5-second timeout per request. Pre-fetched at 5:05 AM and cached in memory for the day; send jobs use the cache as a fallback if a fresh fetch fails. If no data is available at send time, the send is skipped — no "unavailable" message is sent.
-- **Forecast window:** Per-subscriber — starts at their email send time, extends 12 hours forward. One shared lat/lon: Meridian, ID (43.6121, -116.3915).
-- **Condition tiers:** `conditions.py` evaluates NO-GO → CAUTION → GO in priority order. Comparisons use `round(temp_min)` so the displayed temperature matches the tier decision. NO-GO triggers: rounded temp ≤ 44°F (displays as "44F" or below), precipitation, wind > 50 mph, NWS hazards. CAUTION triggers: rounded temp 45–49°F, wind 40–50 mph, rain probability 30–50%, overnight rain, partial darkness in window. Precipitation window: single rain hour shows "starting H:MM AM/PM"; multiple hours show "H:MM AM/PM - H:MM AM/PM".
+- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover. Both are free/keyless. 5-second timeout per request. Pre-fetched at 5:05 AM for all active subscriber locations (keyed by lat/lon) and cached in memory for the day; send jobs use the cache as a fallback if a fresh fetch fails. If no data is available at send time, the send is skipped — no "unavailable" message is sent.
+- **Locations:** Each subscriber has one or more zip codes stored in `subscriber_locations`. Zip codes are resolved at add time via `zippopotam.us` → lat/lon/city/state/timezone stored in DB. No external calls at send time. First location is primary (used for sunrise/sunset). `src/location_resolver.py` handles resolution. Existing subscribers are migrated to Meridian, ID (83642) if they have no locations.
+- **Forecast window:** Per-subscriber — starts at their send time, extends 12 hours forward. Weather is fetched per-location; worst condition across all locations determines the overall status (`_combine_assessments` in `main.py`).
+- **Condition tiers:** `conditions.py` evaluates NO-GO → CAUTION → GO in priority order. Comparisons use `round(temp_min)` so the displayed temperature matches the tier decision. NO-GO triggers: rounded temp ≤ 44°F (displays as "44F" or below), precipitation, wind > 50 mph, NWS hazards. CAUTION triggers: wind 40–50 mph, rain probability 30–50%, overnight rain, partial darkness in window. Temperature does not trigger CAUTION — 45°F and above is GO from a temp perspective. Precipitation window: single rain hour shows "starting H:MM AM/PM"; multiple hours show "H:MM AM/PM - H:MM AM/PM".
 - **Timezone:** All times in `America/Boise` using `zoneinfo`. Times stored and compared in local Boise time. Scheduler is timezone-aware.
 - **Database:** SQLite at `DB_PATH` (env var), mounted as a Podman volume at `/data/`. `subscribers.py` handles all DB operations. Schema uses `message_email` (INTEGER 0/1) and `message_phone` (INTEGER 0/1) to control notification channels; legacy `notify_via` column is retained in the DB but unused — migrated on startup.
 - **Email sending:** `smtplib` over TLS to `smtp.gmail.com:587`. Gmail app password in `.env`.
@@ -75,7 +82,7 @@ The app is a **long-running Python process** (`src/main.py`) that uses APSchedul
 
 | Module | Responsibility |
 |---|---|
-| `src/main.py` | Entry point; builds and starts APScheduler with all jobs |
+| `src/main.py` | Entry point; builds and starts APScheduler with all jobs; `_combine_assessments` merges per-location results |
 | `src/config.py` | Loads `.env`, exposes typed constants |
 | `src/weather.py` | Open-Meteo + NWS fetch with failover |
 | `src/conditions.py` | GO/CAUTION/NO-GO evaluation from parsed forecast |
@@ -85,7 +92,8 @@ The app is a **long-running Python process** (`src/main.py`) that uses APSchedul
 | `src/commands.py` | Handler for each subscriber command (SNOOZE, RESUME, etc.) |
 | `src/subscribers.py` | SQLite CRUD for subscribers table |
 | `src/holidays.py` | US federal holiday lookup via `holidays` package |
-| `src/sun.py` | Sunrise/sunset for Meridian, ID for a given date |
+| `src/location_resolver.py` | Resolve zip code → (lat, lon, city, state, timezone) via zippopotam.us + timezonefinder |
+| `src/sun.py` | Sunrise/sunset for a given lat/lon/timezone and date |
 | `src/health.py` | 24-hour no-send health alert logic |
 | `src/logging_config.py` | JSON log formatter setup |
 | `cli.py` | Standalone subscriber management CLI |

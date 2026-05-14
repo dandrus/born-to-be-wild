@@ -74,14 +74,27 @@ def _cmd_status(subscriber: Subscriber) -> None:
 
 
 def _cmd_forecast(subscriber: Subscriber) -> None:
-    """Send a 3-day forecast summary."""
+    """Send a 3-day forecast summary using the subscriber's primary location."""
     from .weather import fetch_weather
     from .conditions import evaluate
     from .sun import get_sunrise_sunset
+    from .subscribers import get_locations
+
+    locations = get_locations(db_path=config.DB_PATH, subscriber_id=subscriber.id)
+    if not locations:
+        send_simple(subscriber.email, "No Location Set",
+                    "You have no locations configured. Ask your admin to add one via the CLI.")
+        return
+
+    primary = locations[0]
+    loc_label = (
+        f"{primary.city}, {primary.state} ({primary.zip_code})"
+        if primary.city else primary.zip_code
+    )
 
     now = datetime.now(tz=config.TIMEZONE)
     send_h, send_m = (int(x) for x in subscriber.send_time.split(":"))
-    lines = ["3-Day Ride Forecast for Ada/Canyon County", ""]
+    lines = [f"3-Day Ride Forecast for {loc_label}", ""]
 
     for delta in range(1, 4):
         target = now.date() + timedelta(days=delta)
@@ -93,11 +106,11 @@ def _cmd_forecast(subscriber: Subscriber) -> None:
                              send_h, send_m, tzinfo=config.TIMEZONE)
         win_end = win_start + timedelta(hours=config.FORECAST_HOURS)
         overnight_start = win_start - timedelta(hours=6)
-        sunrise, sunset = get_sunrise_sunset(target)
+        sunrise, sunset = get_sunrise_sunset(target, primary.lat, primary.lon, primary.timezone)
 
         try:
-            slices = fetch_weather(win_start, win_end)
-            overnight = fetch_weather(overnight_start, win_start)
+            slices = fetch_weather(win_start, win_end, primary.lat, primary.lon)
+            overnight = fetch_weather(overnight_start, win_start, primary.lat, primary.lon)
         except Exception as exc:
             log.warning(f"Forecast fetch failed for {target}: {exc}")
             lines += [f"{day_label}: Data unavailable ⚠️{skip_note}", ""]

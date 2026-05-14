@@ -41,6 +41,7 @@ def build_body(
     window_end: datetime,
     sunrise: datetime,
     sunset: datetime,
+    location_label: str = "Ada/Canyon County",
 ) -> str:
     emoji = _STATUS_EMOJI[assessment.status]
     window_str = (
@@ -69,7 +70,7 @@ def build_body(
         "",
         f"TODAY'S RIDE STATUS: {assessment.status} {emoji}",
         "",
-        f"Forecast for Ada/Canyon County ({window_str}):",
+        f"Forecast for {location_label} ({window_str}):",
         f"- Temperature range: {assessment.temp_min:.0f}°F - {assessment.temp_max:.0f}°F",
         f"- Wind: {wind_line}",
         f"- Precipitation: {precip_line}",
@@ -116,10 +117,11 @@ def send_report(
     window_end: datetime,
     sunrise: datetime,
     sunset: datetime,
+    location_label: str = "Ada/Canyon County",
 ) -> None:
     """Compose and send the ride report email via Gmail SMTP."""
     subject = build_subject(assessment, window_start)
-    body = build_body(name, assessment, window_start, window_end, sunrise, sunset)
+    body = build_body(name, assessment, window_start, window_end, sunrise, sunset, location_label)
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject

@@ -26,6 +26,9 @@ from src.subscribers import (
     set_active,
     get_accuracy_stats,
     get_email_history,
+    get_locations,
+    add_location,
+    remove_location,
 )
 
 
@@ -127,6 +130,52 @@ def cmd_update(
 
     print(f"Updated {sub.name} ({sub.email}): {', '.join(changes)}")
     print("Note: restart the service to apply send_time or active changes to the scheduler.")
+
+
+def cmd_list_locations(db_path: str, identifier: str) -> None:
+    sub = _resolve_subscriber(db_path, identifier)
+    locs = get_locations(db_path, sub.id)
+    if not locs:
+        print(f"No locations for {sub.name}.")
+        return
+    print(f"Locations for {sub.name} (ID {sub.id}):")
+    print(f"  {'#':<4} {'Zip':<8} {'City':<20} {'ST':<4} {'Timezone':<22} {'Label'}")
+    print("  " + "-" * 68)
+    for i, loc in enumerate(locs, 1):
+        city = loc.city or "-"
+        state = loc.state or "-"
+        label = loc.label or "-"
+        print(f"  {i:<4} {loc.zip_code:<8} {city:<20} {state:<4} {loc.timezone:<22} {label}")
+
+
+def cmd_add_location(db_path: str, identifier: str, zip_code: str, label: str | None) -> None:
+    from src.location_resolver import resolve_zip
+    sub = _resolve_subscriber(db_path, identifier)
+    print(f"Resolving zip code {zip_code}...", end=" ", flush=True)
+    try:
+        lat, lon, city, state, tz = resolve_zip(zip_code)
+    except ValueError as e:
+        sys.exit(str(e))
+    except RuntimeError as e:
+        sys.exit(str(e))
+    print(f"{city}, {state} ({lat:.4f}, {lon:.4f}) [{tz}]")
+    try:
+        loc = add_location(db_path, sub.id, zip_code, lat, lon, tz, city=city, state=state, label=label)
+        parts = [f"{city}, {state} ({zip_code})"]
+        if label:
+            parts.insert(0, label + ":")
+        print(f"Added location for {sub.name}: {' '.join(parts)}")
+    except ValueError as e:
+        sys.exit(str(e))
+
+
+def cmd_remove_location(db_path: str, identifier: str, zip_code: str) -> None:
+    sub = _resolve_subscriber(db_path, identifier)
+    removed = remove_location(db_path, sub.id, zip_code)
+    if removed:
+        print(f"Removed zip {zip_code} from {sub.name}'s locations.")
+    else:
+        sys.exit(f"Zip code {zip_code!r} not found for {sub.name}.")
 
 
 def cmd_stats(db_path: str) -> None:
@@ -254,6 +303,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_hist.add_argument("identifier", help="Subscriber name or ID")
     p_hist.add_argument("--days", type=int, default=7, help="Number of days to look back (default 7)")
 
+    p_lsloc = sub.add_parser("list-locations", help="List locations for a subscriber")
+    p_lsloc.add_argument("identifier", help="Subscriber name or ID")
+
+    p_addloc = sub.add_parser("add-location", help="Add a zip code location for a subscriber")
+    p_addloc.add_argument("identifier", help="Subscriber name or ID")
+    p_addloc.add_argument("zip", help="US zip code, e.g. 83716")
+    p_addloc.add_argument("--label", help='Optional label, e.g. "home" or "work"')
+
+    p_rmloc = sub.add_parser("remove-location", help="Remove a zip code from a subscriber's locations")
+    p_rmloc.add_argument("identifier", help="Subscriber name or ID")
+    p_rmloc.add_argument("zip", help="Zip code to remove")
+
     return parser
 
 
@@ -282,6 +343,12 @@ def main() -> None:
         cmd_stats(db_path)
     elif args.command == "history":
         cmd_history(db_path, args.identifier, args.days)
+    elif args.command == "list-locations":
+        cmd_list_locations(db_path, args.identifier)
+    elif args.command == "add-location":
+        cmd_add_location(db_path, args.identifier, args.zip, args.label)
+    elif args.command == "remove-location":
+        cmd_remove_location(db_path, args.identifier, args.zip)
 
 
 if __name__ == "__main__":

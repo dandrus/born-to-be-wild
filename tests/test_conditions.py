@@ -81,8 +81,8 @@ def test_go_perfect_conditions():
 
 
 def test_go_temp_at_boundary_above():
-    """Exactly 50°F is above the CAUTION threshold → GO."""
-    result = _evaluate_go(_base_slices(temp_f=50.0))
+    """45°F and above is GO — temp only triggers NO-GO below 45."""
+    result = _evaluate_go(_base_slices(temp_f=45.0))
     assert result.status == "GO"
 
 
@@ -97,12 +97,10 @@ def test_go_wind_at_boundary():
 # CAUTION cases
 # ---------------------------------------------------------------------------
 
-def test_caution_low_temp():
-    slices = _base_slices()
-    slices[0] = _make_slice(6, temp_f=47.0)  # one cold hour
-    result = _evaluate(slices)
-    assert result.status == "CAUTION"
-    assert any("47°F" in n for n in result.caution_notes)
+def test_go_temp_47():
+    """47°F is above the NO-GO threshold — temp no longer triggers CAUTION."""
+    result = _evaluate_go(_base_slices(temp_f=47.0))
+    assert result.status == "GO"
 
 
 def test_caution_wind_gusts():
@@ -235,12 +233,10 @@ def test_nogo_temperature_below_45():
     assert any("below 45°F" in r for r in result.nogo_reasons)
 
 
-def test_nogo_temp_44_point_9_is_caution_not_nogo():
-    """44.9°F rounds to 45 for display — should be CAUTION, not NO-GO."""
-    slices = _base_slices()
-    slices[0] = _make_slice(6, temp_f=44.9)
+def test_go_temp_44_point_9():
+    """44.9°F rounds to 45 — above the NO-GO threshold, so GO."""
     result = _evaluate_go([_make_slice(h, temp_f=44.9) for h in range(8, 16)])
-    assert result.status == "CAUTION"
+    assert result.status == "GO"
     assert not result.nogo_reasons
 
 
