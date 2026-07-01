@@ -61,21 +61,71 @@ def filter_slices(slices: list[HourlySlice], window_start: datetime, window_end:
 def fetch_weather(
     window_start: datetime, window_end: datetime, lat: float, lon: float
 ) -> list[HourlySlice]:
-    """Fetch hourly slices covering [window_start, window_end]. Open-Meteo primary, NWS fallback."""
+    """Fetch hourly slices covering [window_start, window_end].
+
+    Open-Meteo is the primary source (NWS is fallback for the base data).
+    HRRR (via Open-Meteo) and Pirate Weather are additionally consulted as
+    best-effort precip-only checks: if either detects precipitation in an hour
+    the primary source missed, the slice's has_precip flag is OR'd on. This
+    catches localized/convective precip that the default Open-Meteo blend can
+    smooth away.
+    """
     try:
         slices = _fetch_open_meteo(window_start, window_end, lat, lon)
-        log.info("Weather fetched from Open-Meteo", extra={})
-        return slices
+        log.info("Weather fetched from Open-Meteo")
     except Exception as exc:
         log.warning(f"Open-Meteo failed ({exc}), trying NWS")
+        try:
+            slices = _fetch_nws(window_start, window_end, lat, lon)
+            log.info("Weather fetched from NWS (fallback)")
+        except Exception as exc2:
+            log.warning(f"NWS also failed ({exc2})")
+            raise RuntimeError("Both weather sources unavailable") from exc2
+
+    _augment_precip_signals(slices, window_start, window_end, lat, lon)
+    return slices
+
+
+def _augment_precip_signals(
+    slices: list[HourlySlice],
+    window_start: datetime,
+    window_end: datetime,
+    lat: float,
+    lon: float,
+) -> None:
+    """OR extra-source precip detections into the primary slices in place.
+
+    Failures in the extra sources are logged and swallowed — they are
+    supplementary signals, not required data.
+    """
+    extra_precip_hours: set[datetime] = set()
 
     try:
-        slices = _fetch_nws(window_start, window_end, lat, lon)
-        log.info("Weather fetched from NWS (fallback)")
-        return slices
+        hrrr_hours = _fetch_hrrr_precip_hours(window_start, window_end, lat, lon)
+        if hrrr_hours:
+            log.info(f"HRRR detected precip in {len(hrrr_hours)} hour(s)")
+        extra_precip_hours |= hrrr_hours
     except Exception as exc:
-        log.warning(f"NWS also failed ({exc})")
-        raise RuntimeError("Both weather sources unavailable") from exc
+        log.warning(f"HRRR precip check failed: {exc}")
+
+    try:
+        from . import config
+        if config.PIRATE_WEATHER_API_KEY:
+            pirate_hours = _fetch_pirate_precip_hours(
+                window_start, window_end, lat, lon, config.PIRATE_WEATHER_API_KEY
+            )
+            if pirate_hours:
+                log.info(f"Pirate Weather detected precip in {len(pirate_hours)} hour(s)")
+            extra_precip_hours |= pirate_hours
+    except Exception as exc:
+        log.warning(f"Pirate Weather precip check failed: {exc}")
+
+    if not extra_precip_hours:
+        return
+
+    for s in slices:
+        if not s.has_precip and s.time in extra_precip_hours:
+            s.has_precip = True
 
 
 # ---------------------------------------------------------------------------
@@ -124,16 +174,17 @@ def _fetch_open_meteo(
         if dt < window_start or dt >= window_end:
             continue
         code = int(codes[i])
+        precip_mm = float(precips[i])
         slices.append(HourlySlice(
             time=dt,
             temp_f=float(temps[i]),
             wind_mph=float(winds[i]),
             gust_mph=float(gusts[i]),
-            precip_mm=float(precips[i]),
+            precip_mm=precip_mm,
             precip_prob=int(probs[i]) if probs[i] is not None else 0,
             weather_code=code,
             description=_WMO_DESCRIPTIONS.get(code, f"Code {code}"),
-            has_precip=code in _PRECIP_CODES,
+            has_precip=code in _PRECIP_CODES or precip_mm > 0,
         ))
 
     if not slices:
@@ -228,3 +279,80 @@ def fetch_nws_alerts(lat: float, lon: float) -> list[str]:
     except Exception as exc:
         log.warning(f"Could not fetch NWS alerts: {exc}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Supplemental precip checks (HRRR, Pirate Weather)
+# ---------------------------------------------------------------------------
+
+def _fetch_hrrr_precip_hours(
+    window_start: datetime, window_end: datetime, lat: float, lon: float
+) -> set[datetime]:
+    """Return set of hours where NOAA HRRR forecasts precipitation.
+
+    HRRR (High-Resolution Rapid Refresh) is a 3km CONUS model that updates
+    hourly and tends to resolve localized convective precip better than the
+    Open-Meteo default blend. Accessed via Open-Meteo's `models=hrrr_conus`.
+    """
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "precipitation,weathercode",
+        "precipitation_unit": "mm",
+        "timezone": "America/Boise",
+        "models": "hrrr_conus",
+        "forecast_days": 2,
+    }
+    resp = requests.get(url, params=params, timeout=config.API_TIMEOUT)
+    resp.raise_for_status()
+    hourly = resp.json().get("hourly") or {}
+    times = hourly.get("time") or []
+    precips = hourly.get("precipitation") or []
+    codes = hourly.get("weathercode") or []
+
+    hours: set[datetime] = set()
+    for i, t_str in enumerate(times):
+        dt = datetime.fromisoformat(t_str).replace(tzinfo=_BOISE_TZ)
+        if dt < window_start or dt >= window_end:
+            continue
+        precip_mm = float(precips[i]) if i < len(precips) and precips[i] is not None else 0.0
+        code = int(codes[i]) if i < len(codes) and codes[i] is not None else -1
+        if precip_mm > 0 or code in _PRECIP_CODES:
+            hours.add(dt)
+    return hours
+
+
+def _fetch_pirate_precip_hours(
+    window_start: datetime, window_end: datetime, lat: float, lon: float, api_key: str
+) -> set[datetime]:
+    """Return set of hours where Pirate Weather forecasts precipitation.
+
+    Pirate Weather is a Dark Sky drop-in and provides hyperlocal precip
+    forecasts (similar to what the iOS Weather app shows). Free tier: 10k
+    calls/month.
+    """
+    exclude = "currently,minutely,daily,alerts,flags"
+    url = f"https://api.pirateweather.net/forecast/{api_key}/{lat},{lon}"
+    params = {"units": "us", "exclude": exclude}
+    resp = requests.get(url, params=params, timeout=config.API_TIMEOUT)
+    resp.raise_for_status()
+    hourly_data = (resp.json().get("hourly") or {}).get("data") or []
+
+    # Pirate marks precip when precipType is set and precipProbability is
+    # meaningful. We use precipIntensity > 0 as the primary signal (matches
+    # what the iOS Weather "raining now" UI is derived from) and require a
+    # non-"none" precipType to filter out spurious zero-intensity flags.
+    hours: set[datetime] = set()
+    for entry in hourly_data:
+        ts = entry.get("time")
+        if ts is None:
+            continue
+        dt = datetime.fromtimestamp(int(ts), tz=_BOISE_TZ).replace(minute=0, second=0, microsecond=0)
+        if dt < window_start or dt >= window_end:
+            continue
+        intensity = float(entry.get("precipIntensity") or 0.0)
+        ptype = (entry.get("precipType") or "").lower()
+        if intensity > 0 and ptype and ptype != "none":
+            hours.add(dt)
+    return hours

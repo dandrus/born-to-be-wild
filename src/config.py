@@ -12,6 +12,7 @@ DB_PATH: str = os.getenv("DB_PATH", "./born-to-be-wild.sqlite")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 TEXTBELT_API_KEY: str = os.getenv("TEXTBELT_API_KEY", "")
+PIRATE_WEATHER_API_KEY: str = os.getenv("PIRATE_WEATHER_API_KEY", "")
 
 TIMEZONE = ZoneInfo("America/Boise")
 FORECAST_HOURS: int = 12

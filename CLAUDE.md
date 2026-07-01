@@ -66,7 +66,7 @@ The app is a **long-running Python process** (`src/main.py`) that uses APSchedul
 
 ### Key Design Points
 
-- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover. Both are free/keyless. 5-second timeout per request. Pre-fetched at 5:05 AM for all active subscriber locations (keyed by lat/lon) and cached in memory for the day; send jobs use the cache as a fallback if a fresh fetch fails. If no data is available at send time, the send is skipped — no "unavailable" message is sent.
+- **Weather:** Open-Meteo is primary; NWS (`api.weather.gov`) is failover for the base hourly data (both are free/keyless). NOAA HRRR (via Open-Meteo's `models=hrrr_conus`, free/keyless) and Pirate Weather (requires `PIRATE_WEATHER_API_KEY`, free 10k/mo tier) are additionally consulted as best-effort **precip-only checks** — if either detects precipitation in an hour the primary source missed, that slice's `has_precip` flag is OR'd on. This catches localized/convective rain that the default Open-Meteo blend smooths away (see `_augment_precip_signals` in `weather.py`). 5-second timeout per request. Supplemental-source failures are logged and swallowed — they never block a report. Pre-fetched at 5:05 AM for all active subscriber locations (keyed by lat/lon) and cached in memory for the day; send jobs use the cache as a fallback if a fresh fetch fails. If no data is available at send time, the send is skipped — no "unavailable" message is sent.
 - **Locations:** Each subscriber has one or more zip codes stored in `subscriber_locations`. Zip codes are resolved at add time via `zippopotam.us` → lat/lon/city/state/timezone stored in DB. No external calls at send time. First location is primary (used for sunrise/sunset). `src/location_resolver.py` handles resolution. Existing subscribers are migrated to Meridian, ID (83642) if they have no locations.
 - **Forecast window:** Per-subscriber — starts at their send time, extends 12 hours forward. Weather is fetched per-location; worst condition across all locations determines the overall status (`_combine_assessments` in `main.py`).
 - **Condition tiers:** `conditions.py` evaluates NO-GO → CAUTION → GO in priority order. Comparisons use `round(temp_min)` so the displayed temperature matches the tier decision. NO-GO triggers: rounded temp ≤ 44°F (displays as "44F" or below), precipitation, wind > 50 mph, NWS hazards. CAUTION triggers: wind 40–50 mph, rain probability 30–50%, overnight rain, partial darkness in window. Temperature does not trigger CAUTION — 45°F and above is GO from a temp perspective. Precipitation window: single rain hour shows "starting H:MM AM/PM"; multiple hours show "H:MM AM/PM - H:MM AM/PM".
@@ -107,6 +107,7 @@ ADMIN_EMAIL=
 DB_PATH=/data/born-to-be-wild.sqlite
 LOG_LEVEL=INFO
 TEXTBELT_API_KEY=
+PIRATE_WEATHER_API_KEY=
 ```
 
 ## Skip Logic
